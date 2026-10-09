@@ -22,13 +22,16 @@ import urllib.parse
 import urllib.request
 from tkinter import font as tkfont
 
-__version__ = "1.0.0"
+from revenue import Ledger
+
+__version__ = "1.1.0"
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 JOURNAL_DIR = os.path.join(os.path.expanduser("~"), "Saved Games", "Frontier Developments", "Elite Dangerous")
 CONFIG_PATH = os.path.join(HERE, "config.json")
 LOCALES_DIR = os.path.join(HERE, "locales")
 SCRIPTS_DIR = os.path.join(HERE, "scripts")
+LEDGER_PATH = os.path.join(HERE, "data", "revenue.json")
 IS_WINDOWS = sys.platform.startswith("win")
 CREATE_NO_WINDOW = 0x08000000 if IS_WINDOWS else 0
 SPANSH = "https://spansh.co.uk"
@@ -292,6 +295,8 @@ class App:
         self.cmdr, self.q = Commander(), queue.Queue()
         self.route, self.step, self.busy, self.replaying = [], 0, False, True
         self.last_msg = ("reading_journal", {})
+        self.view = self.cfg.get("view", "route")
+        self.ledger, self.loop_id = None, None
 
         root.title("Elite Trade Copilot")
         root.configure(bg=C["bg"])
@@ -315,9 +320,25 @@ class App:
             "title": (19, "bold"), "big": (14, "bold"), "txt": (11, "normal"), "small": (9, "normal"),
             "huge": (24, "bold"), "badge": (13, "bold")}.items()}
         self.build()
-        JournalWatcher(self.q).start()
+        threading.Thread(target=self.start_ledger, daemon=True).start()
         root.after(300, self.pump)
-        root.after(4000, self.end_replay)
+        root.after(15000, self.tick)
+
+    def start_ledger(self):
+        """Backfill the revenue ledger from past journals, then start following the live one."""
+        try:
+            ledger = Ledger(LEDGER_PATH, JOURNAL_DIR)
+            ledger.backfill()
+        except Exception as exc:  # the app still works without revenue tracking; say why
+            ledger = None
+            self.q.put(("error", ("ledger_error", f"{type(exc).__name__}: {exc}")))
+        self.q.put(("ledger", ledger))
+        JournalWatcher(self.q).start()
+
+    def tick(self):
+        if self.view == "revenue":
+            self.render_revenue()
+        self.root.after(15000, self.tick)
 
     # -- layout
     def build(self):
@@ -369,18 +390,30 @@ class App:
         self.chips = tk.Frame(self.root, bg=C["bg"])
         self.chips.pack(fill="x", padx=18, pady=(10, 0))
 
-        summary = tk.Frame(self.root, bg=C["bg"])
-        summary.pack(fill="x", padx=18, pady=(14, 2))
+        tabs = tk.Frame(self.root, bg=C["bg"])
+        tabs.pack(fill="x", padx=18, pady=(12, 0))
+        self.tab_btns = {}
+        for key, label in (("route", t("tab_route")), ("revenue", t("tab_revenue"))):
+            b = tk.Label(tabs, text=label, font=self.f["small"], padx=18, pady=7, cursor="hand2")
+            b.pack(side="left", padx=(0, 4))
+            b.bind("<Button-1>", lambda e, k=key: self.set_view(k))
+            self.tab_btns[key] = b
+        tk.Frame(self.root, bg=C["line"], height=1).pack(fill="x", padx=18)
+
+        self.route_view = tk.Frame(self.root, bg=C["bg"])
+        summary = tk.Frame(self.route_view, bg=C["bg"])
+        summary.pack(fill="x", pady=(12, 2))
         self.profit = tk.Label(summary, font=self.f["huge"], fg=C["mag"], bg=C["bg"], anchor="w")
         self.profit.pack(side="left")
         self.summary = tk.Label(summary, font=self.f["txt"], fg=C["dim"], bg=C["bg"], anchor="w", justify="left")
         self.summary.pack(side="left", padx=12, pady=(8, 0))
-        self.bar = tk.Canvas(self.root, height=10, bg=C["bg"], highlightthickness=0)
-        self.bar.pack(fill="x", padx=18, pady=(4, 6))
+        self.bar = tk.Canvas(self.route_view, height=10, bg=C["bg"], highlightthickness=0)
+        self.bar.pack(fill="x", pady=(4, 6))
         self.bar.bind("<Configure>", lambda e: self.draw_bar())
+        self.list = tk.Frame(self.route_view, bg=C["bg"])
+        self.list.pack(fill="both", expand=True, pady=4)
+        self.revenue_view = tk.Frame(self.root, bg=C["bg"])
 
-        self.list = tk.Frame(self.root, bg=C["bg"])
-        self.list.pack(fill="both", expand=True, padx=18, pady=4)
         foot = tk.Frame(self.root, bg=C["panel"])
         foot.pack(fill="x", side="bottom")
         tk.Label(foot, text=f"v{__version__}  •  {t('footer')}", font=self.f["small"], fg=C["dim"], bg=C["panel"]
@@ -390,7 +423,120 @@ class App:
         self.msg.bind("<Configure>", lambda e: self.msg.config(wraplength=max(200, e.width - 10)))
         self.refresh_status()
         self.render_route()
+        self.set_view(self.view)
         self.show_msg(*self.last_msg)
+
+    def set_view(self, view):
+        self.view = view
+        if self.cfg.get("view") != view:
+            self.cfg["view"] = view
+            save_config(self.cfg)
+        for key, b in self.tab_btns.items():
+            on = key == view
+            b.config(fg=C["bg"] if on else C["dim"], bg=C["teal"] if on else C["panel"])
+        self.route_view.pack_forget()
+        self.revenue_view.pack_forget()
+        target = self.route_view if view == "route" else self.revenue_view
+        target.pack(fill="both", expand=True, padx=18, pady=4, before=self.msg.master)
+        if view == "revenue":
+            self.render_revenue()
+
+    # -- revenue (RevOps) view
+    def pipeline(self):
+        return sum(h.get("total_profit", 0) for h in self.route[self.step:])
+
+    def kpi(self, parent, label, value, sub="", color=None):
+        box = tk.Frame(parent, bg=C["panel"], highlightbackground=C["line"], highlightthickness=1)
+        tk.Label(box, text=label.upper(), font=self.f["small"], fg=C["dim"], bg=C["panel"]).pack(anchor="w", padx=12,
+                                                                                               pady=(8, 0))
+        tk.Label(box, text=value, font=self.f["big"], fg=color or C["text"], bg=C["panel"]).pack(anchor="w", padx=12)
+        tk.Label(box, text=sub, font=self.f["small"], fg=C["dim"], bg=C["panel"]).pack(anchor="w", padx=12,
+                                                                                     pady=(0, 8))
+        return box
+
+    def render_revenue(self):
+        t = self.t
+        for w in self.revenue_view.winfo_children():
+            w.destroy()
+        if not self.ledger:
+            tk.Label(self.revenue_view, text=t("loading_ledger"), font=self.f["txt"], fg=C["dim"], bg=C["bg"]
+                     ).pack(pady=40)
+            return
+        m = self.ledger.metrics(self.pipeline())
+        grid = tk.Frame(self.revenue_view, bg=C["bg"])
+        grid.pack(fill="x", pady=(12, 6))
+        acc = "—" if m["accuracy"] is None else f"{t.number(m['accuracy'] * 100)}%"
+        cards = [
+            (t("kpi_today"), f"+{t.credits(m['today'])} cr", t("sales_count", n=m["today_sales"]), C["mag"]),
+            (t("kpi_session"), f"+{t.credits(m['session'])} cr", "", C["teal"]),
+            (t("kpi_per_hour"), f"{t.credits(m['per_hour'])} cr/h", t("last_7_days"), C["text"]),
+            (t("kpi_pipeline"), f"{t.credits(m['pipeline'])} cr", t("pipeline_hint"), C["violet"]),
+            (t("kpi_accuracy"), acc, t("accuracy_hint"), C["warn"]),
+            (t("kpi_total"), f"+{t.credits(m['total'])} cr", t("sales_count", n=m["total_sales"]), C["text"]),
+        ]
+        for i, (label, value, sub, color) in enumerate(cards):
+            self.kpi(grid, label, value, sub, color).grid(row=i // 3, column=i % 3, sticky="nsew", padx=3, pady=3)
+        for col in range(3):
+            grid.columnconfigure(col, weight=1)
+
+        tk.Label(self.revenue_view, text=t("chart_title"), font=self.f["small"], fg=C["dim"], bg=C["bg"], anchor="w"
+                 ).pack(fill="x", pady=(10, 2))
+        chart = tk.Canvas(self.revenue_view, height=150, bg=C["panel"], highlightthickness=1,
+                          highlightbackground=C["line"])
+        chart.pack(fill="x")
+        series = self.ledger.cumulative(30)
+        chart.bind("<Configure>", lambda e: self.draw_chart(chart, series))
+
+        cols = tk.Frame(self.revenue_view, bg=C["bg"])
+        cols.pack(fill="both", expand=True, pady=(10, 0))
+        left = tk.Frame(cols, bg=C["panel"], highlightthickness=1, highlightbackground=C["line"])
+        right = tk.Frame(cols, bg=C["panel"], highlightthickness=1, highlightbackground=C["line"])
+        left.pack(side="left", fill="both", expand=True, padx=(0, 4))
+        right.pack(side="left", fill="both", expand=True, padx=(4, 0))
+        tk.Label(left, text=t("top_commodities"), font=self.f["small"], fg=C["dim"], bg=C["panel"], anchor="w"
+                 ).pack(fill="x", padx=12, pady=(8, 4))
+        top = self.ledger.top_commodities()
+        best = max((p for _, p, _, _ in top), default=0) or 1
+        for name, profit, count, total in top:
+            row = tk.Frame(left, bg=C["panel"])
+            row.pack(fill="x", padx=12, pady=2)
+            margin = profit / total * 100 if total else 0
+            tk.Label(row, text=name, font=self.f["txt"], fg=C["text"], bg=C["panel"], anchor="w").pack(fill="x")
+            bar = tk.Canvas(row, height=6, bg=C["panel"], highlightthickness=0)
+            bar.pack(fill="x")
+            bar.bind("<Configure>", lambda e, c=bar, f=profit / best: (c.delete("all"), c.create_rectangle(
+                0, 0, e.width * max(f, 0.02), 6, fill=C["teal"], outline="")))
+            tk.Label(row, text=f"+{t.credits(profit)} cr · {t('margin')} {t.number(margin)}% · {count} t",
+                     font=self.f["small"], fg=C["dim"], bg=C["panel"], anchor="w").pack(fill="x")
+        if not top:
+            tk.Label(left, text=t("no_sales"), font=self.f["small"], fg=C["dim"], bg=C["panel"]).pack(pady=10)
+        tk.Label(right, text=t("recent_sales"), font=self.f["small"], fg=C["dim"], bg=C["panel"], anchor="w"
+                 ).pack(fill="x", padx=12, pady=(8, 4))
+        for ts, name, count, profit, station in self.ledger.recent_sales():
+            when = ts[5:16].replace("T", " ")
+            tk.Label(right, text=f"{when}  {count} t {name}", font=self.f["txt"], fg=C["text"], bg=C["panel"],
+                     anchor="w").pack(fill="x", padx=12)
+            tk.Label(right, text=f"+{t.credits(profit)} cr · {station or '?'}", font=self.f["small"],
+                     fg=C["mag"] if profit >= 0 else C["warn"], bg=C["panel"], anchor="w").pack(fill="x", padx=12,
+                                                                                              pady=(0, 4))
+
+    def draw_chart(self, cv, series):
+        cv.delete("all")
+        w, h, pad = cv.winfo_width(), cv.winfo_height(), 14
+        if len(series) < 2:
+            cv.create_text(w / 2, h / 2, text=self.t("no_sales"), fill=C["dim"], font=self.f["small"])
+            return
+        t0, t1 = series[0][0].timestamp(), series[-1][0].timestamp()
+        top = max(v for _, v in series) or 1
+        low = min(0, min(v for _, v in series))
+        span_t, span_v = max(t1 - t0, 1), max(top - low, 1)
+        pts = [(pad + (ts.timestamp() - t0) / span_t * (w - 2 * pad),
+                h - pad - (v - low) / span_v * (h - 2 * pad)) for ts, v in series]
+        cv.create_polygon([(pts[0][0], h - pad)] + pts + [(pts[-1][0], h - pad)], fill="#16343a", outline="")
+        cv.create_line(pts, fill=C["teal"], width=2, smooth=False)
+        cv.create_oval(pts[-1][0] - 4, pts[-1][1] - 4, pts[-1][0] + 4, pts[-1][1] + 4, fill=C["mag"], outline="")
+        cv.create_text(w - pad, pad, text=f"+{self.t.credits(series[-1][1])} cr", anchor="ne", fill=C["mag"],
+                       font=self.f["small"])
 
     @staticmethod
     def draw_gradient(cv, width):
@@ -520,6 +666,8 @@ class App:
         self.cfg["window"] = [self.root.winfo_width(), self.root.winfo_height(),
                               self.root.winfo_x(), self.root.winfo_y()]
         save_config(self.cfg)
+        if self.ledger:
+            self.ledger.save()
         self.root.destroy()
 
     def say(self, key, **kw):
@@ -586,6 +734,7 @@ class App:
         if isinstance(result, dict):
             result = [result]
         self.route, self.step = result, 0
+        self.loop_id = self.ledger.save_plan(result) if (self.ledger and result) else None
         self.render_route()
         if not result:
             self.show_msg("no_route")
@@ -597,12 +746,21 @@ class App:
         self.say("say_route_ready", profit=self.t.spoken_credits(result[-1].get("cumulative_profit", 0)),
                  goods=goods, station=first["destination"]["station"], system=first["destination"]["system"])
 
+    def on_sale(self, sale):
+        """Credit a sale to the loop stop it belongs to, so forecast accuracy can be measured."""
+        target = getattr(self, "credit_target", None)  # (loop_id, hop, station) of the stop we docked at
+        if target and target[0] and sale["station"] == target[2]:
+            self.ledger.realise(target[0], target[1], sale["profit"])
+        if self.view == "revenue":
+            self.render_revenue()
+
     def on_docked(self, ev):
         if not self.route:
             self.calculate()
             return
         hop = self.route[self.step] if self.step < len(self.route) else None
         if hop and ev.get("StationName") == hop["destination"]["station"]:
+            self.credit_target = (self.loop_id, self.step, ev.get("StationName"))
             sold = ", ".join(c["name"] for c in hop.get("commodities", []))
             self.step += 1
             self.render_route()
@@ -627,6 +785,9 @@ class App:
                 kind, data = self.q.get_nowait()
                 if kind == "event":
                     self.cmdr.apply(data)
+                    sale = self.ledger.record(data) if self.ledger else None
+                    if sale and not self.replaying:
+                        self.on_sale(sale)
                     if self.replaying:
                         continue
                     if data.get("event") == "Docked":
@@ -636,6 +797,11 @@ class App:
                         self.refresh_status()
                 elif kind == "route":
                     self.on_route(data)
+                elif kind == "ledger":
+                    self.ledger = data
+                    self.root.after(4000, self.end_replay)  # the journal watcher starts replaying now
+                    if self.view == "revenue":
+                        self.render_revenue()
                 elif kind == "error":
                     self.show_msg(data[0], {"error": data[1]})
         except queue.Empty:

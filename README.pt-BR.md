@@ -16,6 +16,20 @@ Uma janelinha de apoio para o **Elite Dangerous** que mostra, **sozinha**, o cir
 - **Idiomas:** português (Brasil), inglês e espanhol, detectados automaticamente e trocáveis na janela.
 - **Só leitura e seguro:** não aperta nada no jogo nem mexe na memória dele. Assim como o EDMC e o EDDI, só lê os arquivos de diário que o próprio jogo grava para ferramentas externas.
 
+### Aba Receita: RevOps para o seu comandante
+
+Uma segunda aba transforma seu comércio num pequeno painel de receita, montado com as vendas que o jogo já registra no diário (inclusive das sessões antigas):
+
+- **Receita hoje, na sessão e total**, com o número de vendas.
+- **Créditos por hora** nos últimos 7 dias de jogo.
+- **Pipeline:** lucro que ainda falta realizar no circuito atual.
+- **Precisão do forecast:** realizado ÷ previsto em cada parada concluída.
+- **Gráfico de receita acumulada** (30 dias), **mix de produtos** por lucro e margem e **últimas vendas**.
+
+Tudo fica no seu PC num arquivo pequeno, `data/revenue.json`: sem banco de dados e sem conta.
+
+![Aba Receita (dados de exemplo)](docs/screenshot-revenue-pt-BR.png)
+
 ## Requisitos
 
 - Windows 10 ou 11 (a voz e a rede de reserva usam componentes do próprio Windows).

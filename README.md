@@ -16,6 +16,20 @@ A small companion window for **Elite Dangerous** that tells you, **automatically
 - **Languages:** English, Português (Brasil), Español — detected automatically, switchable in the window.
 - **Read-only and safe:** it never sends input to the game, never touches game memory. Like EDMC or EDDI, it only reads the journal files the game writes for third-party tools.
 
+### Revenue tab — RevOps for your commander
+
+A second tab turns your trading into a small revenue dashboard, built from the sales the game already records in the journal (including your past sessions):
+
+- **Revenue today, this session and all-time**, plus number of sales.
+- **Credits per hour** over the last 7 days of play.
+- **Pipeline** — profit still to be realised in the current loop.
+- **Forecast accuracy** — realised ÷ planned for every loop stop you completed.
+- **Cumulative revenue chart** (30 days), **product mix** by profit and margin, and **recent sales**.
+
+Everything stays on your PC in a small `data/revenue.json` file — no database, no account.
+
+![Revenue tab (example data)](docs/screenshot-revenue-pt-BR.png)
+
 ## Requirements
 
 - Windows 10 or 11 (voice and the HTTPS fallback use built-in Windows components).

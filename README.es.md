@@ -16,6 +16,20 @@ Una pequeña ventana de apoyo para **Elite Dangerous** que te muestra, **automá
 - **Idiomas:** español, inglés y portugués (Brasil), detectados automáticamente y seleccionables en la ventana.
 - **Solo lectura y seguro:** no envía teclas al juego ni toca su memoria. Igual que EDMC o EDDI, solo lee los archivos de diario que el propio juego escribe para herramientas externas.
 
+### Pestaña Ingresos: RevOps para tu comandante
+
+Una segunda pestaña convierte tu comercio en un pequeño panel de ingresos, construido con las ventas que el juego ya registra en el diario (incluidas tus sesiones anteriores):
+
+- **Ingresos de hoy, de la sesión y totales**, con el número de ventas.
+- **Créditos por hora** en los últimos 7 días de juego.
+- **Pipeline:** ganancia que falta realizar en el circuito actual.
+- **Precisión del forecast:** realizado ÷ previsto en cada parada completada.
+- **Gráfico de ingresos acumulados** (30 días), **mix de productos** por ganancia y margen y **últimas ventas**.
+
+Todo queda en tu PC en un archivo pequeño, `data/revenue.json`: sin base de datos y sin cuenta.
+
+![Pestaña Ingresos (datos de ejemplo)](docs/screenshot-revenue-pt-BR.png)
+
 ## Requisitos
 
 - Windows 10 u 11 (la voz y la conexión de respaldo usan componentes del propio Windows).
